@@ -2,6 +2,8 @@
 
 A minimalistic Python editor with full indentation handling support. IDLE but better and faster. Ideal for working with AI-generated code.
 
+![img](thumb.png)
+
 ## Features
 
 - **Smart Indentation**: Auto-detects tabs vs spaces, maintains consistency, smart Enter/Backspace behavior
