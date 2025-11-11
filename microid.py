@@ -16,7 +16,7 @@ import subprocess
 import tempfile
 from PySide6.QtWidgets import (QApplication, QMainWindow, QPlainTextEdit, 
                                QFileDialog, QMessageBox, QToolBar, QStatusBar,
-                               QTextEdit, QSplitter, QCompleter)
+                               QTextEdit, QSplitter, QCompleter, QInputDialog)
 from PySide6.QtCore import Qt, QRegularExpression, QProcess, QStringListModel
 from PySide6.QtGui import (QSyntaxHighlighter, QTextCharFormat, QColor, 
                           QFont, QKeyEvent, QAction, QTextCursor)
@@ -318,9 +318,17 @@ class CodeEditor(QPlainTextEdit):
         # Update completions on text change
         self.textChanged.connect(self.update_completions)
         
+        # Track cursor position for status updates
+        self.cursorPositionChanged.connect(self.on_cursor_position_changed)
+        
         # Track Ctrl key for jump to definition
         self.ctrl_pressed = False
         self.setMouseTracking(True)
+    
+    def on_cursor_position_changed(self):
+        """Emit signal when cursor position changes"""
+        # This will be connected to the main window to update status bar
+        pass
     
     def detect_indentation(self):
         """Auto-detect indentation type from existing content"""
@@ -744,6 +752,10 @@ class PythonEditor(QMainWindow):
         # Track modifications
         self.editor.document().modificationChanged.connect(self.on_modification_changed)
         
+        # Track cursor position and text changes for statistics
+        self.editor.cursorPositionChanged.connect(self.update_status_bar)
+        self.editor.textChanged.connect(self.update_status_bar)
+        
         # Create toolbar
         toolbar = QToolBar()
         self.addToolBar(toolbar)
@@ -786,6 +798,12 @@ class PythonEditor(QMainWindow):
         validate_action.triggered.connect(self.validate_syntax)
         toolbar.addAction(validate_action)
         
+        # Go to line action
+        goto_action = QAction("Go to Line", self)
+        goto_action.setShortcut("Ctrl+G")
+        goto_action.triggered.connect(self.go_to_line)
+        toolbar.addAction(goto_action)
+        
         toolbar.addSeparator()
         
         # Indent type toggle with state display
@@ -821,8 +839,21 @@ class PythonEditor(QMainWindow):
     
     def update_status_bar(self):
         """Update status bar and indent button with current settings"""
-        indent_info = f"Indent: {self.editor.indent_type} ({self.editor.indent_size})"
-        self.statusBar.showMessage(indent_info)
+        # Get cursor position
+        cursor = self.editor.textCursor()
+        line = cursor.blockNumber() + 1
+        col = cursor.columnNumber() + 1
+        
+        # Get total lines and characters
+        total_lines = self.editor.document().blockCount()
+        total_chars = len(self.editor.toPlainText())
+        
+        # Get indent info
+        indent_info = f"{self.editor.indent_type.capitalize()} ({self.editor.indent_size})"
+        
+        # Build status message
+        status = f"Line {line}/{total_lines} | Col {col} | {total_chars} chars | Indent: {indent_info}"
+        self.statusBar.showMessage(status)
         
         # Update button text
         if self.editor.indent_type == "spaces":
@@ -877,6 +908,30 @@ class PythonEditor(QMainWindow):
         lines.insert(insert_line, typing_imports)
         self.editor.setPlainText('\n'.join(lines))
         self.append_output("Added typing imports", "#6A8759")
+    
+    def go_to_line(self):
+        """Open dialog to go to a specific line"""
+        total_lines = self.editor.document().blockCount()
+        current_line = self.editor.textCursor().blockNumber() + 1
+        
+        line_num, ok = QInputDialog.getInt(
+            self,
+            "Go to Line",
+            f"Line number (1-{total_lines}):",
+            current_line,
+            1,
+            total_lines,
+            1
+        )
+        
+        if ok:
+            # Move cursor to the specified line
+            cursor = QTextCursor(self.editor.document().findBlockByLineNumber(line_num - 1))
+            self.editor.setTextCursor(cursor)
+            self.editor.centerCursor()
+            
+            # Briefly highlight the line
+            self.editor.highlight_line(line_num - 1)
     
     def append_output(self, text, color="#D4D4D4"):
         """Append text to output console with optional color"""
