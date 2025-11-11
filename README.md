@@ -1,7 +1,5 @@
 # Microid
 
-![img](thumb.png)
-
 A minimalistic Python editor with full indentation handling support. IDLE but better and faster. Ideal for working with AI-generated code.
 
 ## Features
@@ -13,13 +11,15 @@ A minimalistic Python editor with full indentation handling support. IDLE but be
 - **Syntax Validation**: Check for errors with F6 without running code
 - **Autocomplete**: Context-aware suggestions for functions, classes, variables, keywords, type hints
 - **Jump to Definition**: Ctrl+Click to navigate to function/class definitions
+- **Go to Line**: Ctrl+G to quickly jump to any line number
+- **Statistics**: Real-time display of current line, column, total lines, and character count
 - **F-String Support**: Proper highlighting of f-strings and embedded expressions
 
 ## Installation
 
 ```bash
 pip install PySide6
-python microid.py
+python python_editor.py
 ```
 
 ## Keyboard Shortcuts
@@ -32,12 +32,13 @@ python microid.py
 | **Ctrl+Shift+S** | Save as |
 | **F5** | Run code |
 | **F6** | Validate syntax |
+| **Ctrl+G** | Go to line |
 | **Ctrl+Click** | Jump to definition |
 | **Tab** | Indent |
 | **Shift+Tab** | Dedent |
 | **Esc** | Close autocomplete |
 
-## Why microid?
+## Why Microid?
 
 - **Perfect for AI code**: Handles any indentation style from Claude, ChatGPT, Copilot
 - **Fast**: Instant startup, no bloat
@@ -47,10 +48,9 @@ python microid.py
 
 ## Usage
 
-Open or paste AI-generated code and microid automatically adapts to the indentation style. Press F5 to run, F6 to validate. Use Ctrl+Click to navigate through functions and classes.
+Open or paste AI-generated code and Microid automatically adapts to the indentation style. Press F5 to run, F6 to validate. Use Ctrl+Click to navigate through functions and classes.
 
 ## Requirements
 
 - Python 3.7+
 - PySide6
-
