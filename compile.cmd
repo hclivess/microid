@@ -1,0 +1,1 @@
+nuitka .\microid.py --windows-console-mode=disable
