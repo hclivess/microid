@@ -2,12 +2,15 @@
 """
 Minimalistic Python File Editor
 Features:
+- Complete dark/light mode UI with persistence
 - Syntax highlighting for Python code
 - Smart indentation (auto-detect tabs vs spaces)
-- Maintains indent type consistency
+- Line numbers display
 - Code execution
 - Syntax validation
-- Line numbers display
+- Ctrl+Click error navigation
+- Ctrl+F Find & Replace dialog
+- Multi-line Tab indent/unindent
 """
 
 import sys
@@ -17,58 +20,91 @@ import subprocess
 import tempfile
 from PySide6.QtWidgets import (QApplication, QMainWindow, QPlainTextEdit, 
                                QFileDialog, QMessageBox, QToolBar, QStatusBar,
-                               QTextEdit, QSplitter, QCompleter, QInputDialog, QWidget)
-from PySide6.QtCore import Qt, QRegularExpression, QProcess, QStringListModel, QRect
+                               QTextEdit, QSplitter, QCompleter, QInputDialog, QWidget,
+                               QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton,
+                               QLabel, QCheckBox)
+from PySide6.QtCore import Qt, QRegularExpression, QProcess, QStringListModel, QRect, QTimer
 from PySide6.QtGui import (QSyntaxHighlighter, QTextCharFormat, QColor, 
-                          QFont, QKeyEvent, QAction, QTextCursor, QPainter)
+                          QFont, QKeyEvent, QAction, QTextCursor, QPainter, QPalette, QTextDocument)
 
 
 class PythonHighlighter(QSyntaxHighlighter):
     """Syntax highlighter for Python code"""
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, is_dark_mode=True):
         super().__init__(parent)
+        self.is_dark_mode = is_dark_mode
+        self.setup_formats()
         
-        # Define formats matching PyCharm Darcula theme
-        keyword_format = QTextCharFormat()
-        keyword_format.setForeground(QColor("#CC7832"))
-        keyword_format.setFontWeight(QFont.Bold)
+    def setup_formats(self):
+        """Setup text formats based on theme"""
+        # Define formats matching PyCharm theme
+        if self.is_dark_mode:
+            # Dark theme colors
+            keyword_color = "#CC7832"
+            string_color = "#6A8759"
+            comment_color = "#808080"
+            function_color = "#FFC66D"
+            class_color = "#A9B7C6"
+            number_color = "#6897BB"
+            decorator_color = "#BBB529"
+            builtin_color = "#8888C6"
+            self_color = "#94558D"
+            type_color = "#8888C6"
+        else:
+            # Light theme colors
+            keyword_color = "#0000FF"
+            string_color = "#008000"
+            comment_color = "#808080"
+            function_color = "#795E26"
+            class_color = "#267F99"
+            number_color = "#098658"
+            decorator_color = "#AF00DB"
+            builtin_color = "#0000FF"
+            self_color = "#001080"
+            type_color = "#267F99"
         
-        string_format = QTextCharFormat()
-        string_format.setForeground(QColor("#6A8759"))
+        self.keyword_format = QTextCharFormat()
+        self.keyword_format.setForeground(QColor(keyword_color))
+        self.keyword_format.setFontWeight(QFont.Bold)
         
-        fstring_brace_format = QTextCharFormat()
-        fstring_brace_format.setForeground(QColor("#CC7832"))
-        fstring_brace_format.setFontWeight(QFont.Bold)
+        self.string_format = QTextCharFormat()
+        self.string_format.setForeground(QColor(string_color))
         
-        comment_format = QTextCharFormat()
-        comment_format.setForeground(QColor("#808080"))
-        comment_format.setFontItalic(True)
+        self.fstring_brace_format = QTextCharFormat()
+        self.fstring_brace_format.setForeground(QColor(keyword_color))
+        self.fstring_brace_format.setFontWeight(QFont.Bold)
         
-        function_format = QTextCharFormat()
-        function_format.setForeground(QColor("#FFC66D"))
+        self.comment_format = QTextCharFormat()
+        self.comment_format.setForeground(QColor(comment_color))
+        self.comment_format.setFontItalic(True)
         
-        class_format = QTextCharFormat()
-        class_format.setForeground(QColor("#A9B7C6"))
-        class_format.setFontWeight(QFont.Bold)
+        self.function_format = QTextCharFormat()
+        self.function_format.setForeground(QColor(function_color))
         
-        number_format = QTextCharFormat()
-        number_format.setForeground(QColor("#6897BB"))
+        self.class_format = QTextCharFormat()
+        self.class_format.setForeground(QColor(class_color))
+        self.class_format.setFontWeight(QFont.Bold)
         
-        decorator_format = QTextCharFormat()
-        decorator_format.setForeground(QColor("#BBB529"))
+        self.number_format = QTextCharFormat()
+        self.number_format.setForeground(QColor(number_color))
         
-        builtin_format = QTextCharFormat()
-        builtin_format.setForeground(QColor("#8888C6"))
+        self.decorator_format = QTextCharFormat()
+        self.decorator_format.setForeground(QColor(decorator_color))
         
-        self_format = QTextCharFormat()
-        self_format.setForeground(QColor("#94558D"))
-        self_format.setFontItalic(True)
+        self.builtin_format = QTextCharFormat()
+        self.builtin_format.setForeground(QColor(builtin_color))
         
-        type_format = QTextCharFormat()
-        type_format.setForeground(QColor("#8888C6"))
+        self.self_format = QTextCharFormat()
+        self.self_format.setForeground(QColor(self_color))
+        self.self_format.setFontItalic(True)
         
+        self.type_format = QTextCharFormat()
+        self.type_format.setForeground(QColor(type_color))
+        
+        # Store patterns as instance variables for later use
         self.highlighting_rules = []
+        self.comment_pattern = QRegularExpression(r'#[^\n]*')
         
         # Keywords (highest priority)
         keywords = [
@@ -80,7 +116,7 @@ class PythonHighlighter(QSyntaxHighlighter):
         ]
         
         keyword_pattern = r'\b(' + '|'.join(keywords) + r')\b'
-        self.highlighting_rules.append((QRegularExpression(keyword_pattern), keyword_format))
+        self.highlighting_rules.append((QRegularExpression(keyword_pattern), self.keyword_format))
         
         # Built-in functions and exceptions
         builtins = [
@@ -93,7 +129,7 @@ class PythonHighlighter(QSyntaxHighlighter):
         ]
         
         builtin_pattern = r'\b(' + '|'.join(builtins) + r')\b'
-        self.highlighting_rules.append((QRegularExpression(builtin_pattern), builtin_format))
+        self.highlighting_rules.append((QRegularExpression(builtin_pattern), self.builtin_format))
         
         # Type annotations
         type_hints = [
@@ -102,54 +138,28 @@ class PythonHighlighter(QSyntaxHighlighter):
             'Generic', 'Protocol', 'Literal', 'Final', 'ClassVar'
         ]
         type_pattern = r'\b(' + '|'.join(type_hints) + r')\b'
-        self.highlighting_rules.append((QRegularExpression(type_pattern), type_format))
+        self.highlighting_rules.append((QRegularExpression(type_pattern), self.type_format))
         
         # self keyword
-        self.highlighting_rules.append((
-            QRegularExpression(r'\bself\b'),
-            self_format
-        ))
+        self.highlighting_rules.append((QRegularExpression(r'\bself\b'), self.self_format))
         
         # Numbers
-        self.highlighting_rules.append((
-            QRegularExpression(r'\b[+-]?[0-9]+\.?[0-9]*([eE][+-]?[0-9]+)?\b'),
-            number_format
-        ))
+        self.highlighting_rules.append((QRegularExpression(r'\b[+-]?[0-9]+\.?[0-9]*([eE][+-]?[0-9]+)?\b'), self.number_format))
         
         # Decorators
-        self.highlighting_rules.append((
-            QRegularExpression(r'@\w+'),
-            decorator_format
-        ))
+        self.highlighting_rules.append((QRegularExpression(r'@\w+'), self.decorator_format))
         
         # Function definitions
-        self.highlighting_rules.append((
-            QRegularExpression(r'\bdef\s+(\w+)'),
-            function_format
-        ))
+        self.highlighting_rules.append((QRegularExpression(r'\bdef\s+(\w+)'), self.function_format))
         
         # Function calls
-        self.highlighting_rules.append((
-            QRegularExpression(r'\b(\w+)(?=\s*\()'),
-            function_format
-        ))
+        self.highlighting_rules.append((QRegularExpression(r'\b(\w+)(?=\s*\()'), self.function_format))
         
         # Class definitions
-        self.highlighting_rules.append((
-            QRegularExpression(r'\bclass\s+(\w+)'),
-            class_format
-        ))
+        self.highlighting_rules.append((QRegularExpression(r'\bclass\s+(\w+)'), self.class_format))
         
-        # Comments
-        self.highlighting_rules.append((
-            QRegularExpression(r'#[^\n]*'),
-            comment_format
-        ))
-        
-        self.string_format = string_format
-        self.fstring_brace_format = fstring_brace_format
-        self.tri_single_format = string_format
-        self.tri_double_format = string_format
+        self.tri_single_format = self.string_format
+        self.tri_double_format = self.string_format
         
     def highlightBlock(self, text):
         """Apply syntax highlighting to a block of text"""
@@ -186,10 +196,10 @@ class PythonHighlighter(QSyntaxHighlighter):
                     self.setCurrentBlockState(1)
                     return
         
-        # Handle single-line strings
+        # Handle single-line strings (including f-strings)
         self.highlight_strings(text)
         
-        # Apply regular highlighting rules
+        # Apply regular highlighting rules (after strings so keywords in strings aren't highlighted)
         for pattern, format_style in self.highlighting_rules:
             match_iterator = pattern.globalMatch(text)
             while match_iterator.hasNext():
@@ -197,13 +207,25 @@ class PythonHighlighter(QSyntaxHighlighter):
                 start = match.capturedStart()
                 length = match.capturedLength()
                 
-                if self.format(start).foreground().color() != self.string_format.foreground().color():
+                # Don't override string formatting
+                current_format = self.format(start)
+                if (current_format.foreground().color() != self.string_format.foreground().color() or 
+                    format_style == self.comment_format):
                     self.setFormat(start, length, format_style)
+        
+        # Apply comments last to override everything
+        comment_iterator = self.comment_pattern.globalMatch(text)
+        while comment_iterator.hasNext():
+            match = comment_iterator.next()
+            start = match.capturedStart()
+            length = match.capturedLength()
+            self.setFormat(start, length, self.comment_format)
     
     def highlight_strings(self, text):
         """Highlight string literals including f-strings"""
         i = 0
         while i < len(text):
+            # Check for f-string
             if i < len(text) - 1 and text[i] in 'fFrRbBuU':
                 prefix = text[i]
                 quote_char = text[i + 1] if i + 1 < len(text) else None
@@ -228,6 +250,7 @@ class PythonHighlighter(QSyntaxHighlighter):
                         i += 1
                     continue
             
+            # Regular strings
             elif text[i] in ['"', "'"]:
                 quote_char = text[i]
                 start = i
@@ -294,9 +317,6 @@ class CodeEditor(QPlainTextEdit):
             font = QFont("Courier New", 10)
         self.setFont(font)
         
-        # Set dark background
-        self.setStyleSheet("background-color: #1E1E1E; color: #D4D4D4;")
-        
         # Set tab behavior
         self.setTabStopDistance(40)  # 4 spaces equivalent
         
@@ -305,16 +325,20 @@ class CodeEditor(QPlainTextEdit):
         self.indent_size = 4
         self.auto_detect_indent = True
         
+        # Theme settings
+        self.is_dark_mode = True
+        self.load_theme_preference()
+        
         # Initialize highlighter
-        self.highlighter = PythonHighlighter(self.document())
+        self.highlighter = PythonHighlighter(self.document(), self.is_dark_mode)
         
         # Setup line number area
         self.line_number_area = LineNumberArea(self)
         
         # Connect signals for line numbers
         self.blockCountChanged.connect(self.updateLineNumberAreaWidth)
-        self.updateRequest.connect(self.updateLineNumberArea)
-        self.cursorPositionChanged.connect(self.updateLineNumberArea)
+        self.updateRequest.connect(self.updateLineNumberAreaHelper)
+        self.cursorPositionChanged.connect(lambda: self.line_number_area.update())
         
         # Set initial viewport margins
         self.updateLineNumberAreaWidth(0)
@@ -339,6 +363,42 @@ class CodeEditor(QPlainTextEdit):
         self.ctrl_pressed = False
         self.setMouseTracking(True)
     
+    def load_theme_preference(self):
+        """Load theme preference from file"""
+        try:
+            with open('.microid_theme', 'r') as f:
+                theme = f.read().strip()
+                self.is_dark_mode = (theme == 'dark')
+                self.apply_theme()
+        except:
+            self.is_dark_mode = True
+            self.apply_theme()
+    
+    def save_theme_preference(self):
+        """Save theme preference to file"""
+        try:
+            with open('.microid_theme', 'w') as f:
+                f.write('dark' if self.is_dark_mode else 'light')
+        except:
+            pass
+    
+    def apply_theme(self):
+        """Apply current theme"""
+        if self.is_dark_mode:
+            self.setStyleSheet("background-color: #1E1E1E; color: #D4D4D4;")
+        else:
+            self.setStyleSheet("background-color: #FFFFFF; color: #000000;")
+        
+        # Reinitialize highlighter with current theme
+        self.highlighter = PythonHighlighter(self.document(), self.is_dark_mode)
+        self.highlighter.rehighlight()
+    
+    def toggle_theme(self):
+        """Toggle between light and dark mode"""
+        self.is_dark_mode = not self.is_dark_mode
+        self.save_theme_preference()
+        self.apply_theme()
+    
     def lineNumberAreaWidth(self):
         """Calculate width needed for line numbers"""
         digits = 1
@@ -355,16 +415,21 @@ class CodeEditor(QPlainTextEdit):
         """Update viewport margins when line count changes"""
         self.setViewportMargins(self.lineNumberAreaWidth(), 0, 0, 0)
     
+    def updateLineNumberAreaHelper(self, rect, dy):
+        """Helper to connect updateRequest signal properly"""
+        self.updateLineNumberArea(rect, dy)
+    
     def updateLineNumberArea(self, rect, dy):
         """Update line number area when editor scrolls"""
         if dy:
             self.line_number_area.scroll(0, dy)
         else:
             self.line_number_area.update(0, rect.y(), 
-                                       self.lineNumberAreaWidth(), rect.height())
-        
+                                   self.lineNumberAreaWidth(), rect.height())
+    
         if rect.contains(self.viewport().rect()):
             self.updateLineNumberAreaWidth(0)
+
     
     def resizeEvent(self, event):
         """Handle resize events"""
@@ -378,7 +443,10 @@ class CodeEditor(QPlainTextEdit):
     def lineNumberAreaPaintEvent(self, event):
         """Paint line numbers"""
         painter = QPainter(self.line_number_area)
-        painter.fillRect(event.rect(), QColor("#2B2B2B"))  # Slightly darker than editor
+        if self.is_dark_mode:
+            painter.fillRect(event.rect(), QColor("#2B2B2B"))
+        else:
+            painter.fillRect(event.rect(), QColor("#F0F0F0"))
         
         block = self.firstVisibleBlock()
         block_number = block.blockNumber()
@@ -394,12 +462,21 @@ class CodeEditor(QPlainTextEdit):
                 
                 # Highlight current line number
                 if block_number == current_block_number:
-                    painter.fillRect(0, int(top), self.lineNumberAreaWidth(), 
-                                   font_metrics.height(), 
-                                   QColor("#3A3A3A"))
-                    painter.setPen(QColor("#D4D4D4"))  # Bright for current line
+                    if self.is_dark_mode:
+                        painter.fillRect(0, int(top), self.lineNumberAreaWidth(), 
+                                       font_metrics.height(), 
+                                       QColor("#3A3A3A"))
+                        painter.setPen(QColor("#D4D4D4"))
+                    else:
+                        painter.fillRect(0, int(top), self.lineNumberAreaWidth(), 
+                                       font_metrics.height(), 
+                                       QColor("#E0E0E0"))
+                        painter.setPen(QColor("#000000"))
                 else:
-                    painter.setPen(QColor("#606366"))  # Dim for other lines
+                    if self.is_dark_mode:
+                        painter.setPen(QColor("#606366"))
+                    else:
+                        painter.setPen(QColor("#999999"))
                 
                 painter.drawText(0, int(top), self.lineNumberAreaWidth(), 
                                font_metrics.height(),
@@ -586,27 +663,38 @@ class CodeEditor(QPlainTextEdit):
             return
         
         elif event.key() == Qt.Key_Tab:
-            if self.indent_type == "tabs":
-                self.insertPlainText('\t')
+            cursor = self.textCursor()
+            if cursor.hasSelection():
+                # Indent selected lines
+                self.indent_selected_lines()
             else:
-                self.insertPlainText(' ' * self.indent_size)
+                # Insert tab/spaces at cursor
+                if self.indent_type == "tabs":
+                    self.insertPlainText('\t')
+                else:
+                    self.insertPlainText(' ' * self.indent_size)
             return
         
         elif event.key() == Qt.Key_Backtab:
             cursor = self.textCursor()
-            cursor.select(QTextCursor.LineUnderCursor)
-            line = cursor.selectedText()
-            
-            if self.indent_type == "tabs":
-                if line.startswith('\t'):
-                    cursor.movePosition(QTextCursor.StartOfLine)
-                    cursor.deleteChar()
+            if cursor.hasSelection():
+                # Unindent selected lines
+                self.unindent_selected_lines()
             else:
-                leading_spaces = len(line) - len(line.lstrip(' '))
-                if leading_spaces >= self.indent_size:
-                    cursor.movePosition(QTextCursor.StartOfLine)
-                    for _ in range(self.indent_size):
+                # Unindent current line
+                cursor.select(QTextCursor.LineUnderCursor)
+                line = cursor.selectedText()
+                
+                if self.indent_type == "tabs":
+                    if line.startswith('\t'):
+                        cursor.movePosition(QTextCursor.StartOfLine)
                         cursor.deleteChar()
+                else:
+                    leading_spaces = len(line) - len(line.lstrip(' '))
+                    if leading_spaces >= self.indent_size:
+                        cursor.movePosition(QTextCursor.StartOfLine)
+                        for _ in range(self.indent_size):
+                            cursor.deleteChar()
             
             return
         
@@ -649,6 +737,66 @@ class CodeEditor(QPlainTextEdit):
             self.completer.complete(cursor_rect)
         else:
             self.completer.popup().hide()
+    
+    def indent_selected_lines(self):
+        """Indent all selected lines"""
+        cursor = self.textCursor()
+        start = cursor.selectionStart()
+        end = cursor.selectionEnd()
+        
+        # Move to start of selection
+        cursor.setPosition(start)
+        cursor.movePosition(QTextCursor.StartOfLine)
+        start_block = cursor.blockNumber()
+        
+        # Move to end of selection
+        cursor.setPosition(end)
+        end_block = cursor.blockNumber()
+        
+        # Indent each line
+        cursor.beginEditBlock()
+        for block_num in range(start_block, end_block + 1):
+            cursor.setPosition(self.document().findBlockByNumber(block_num).position())
+            if self.indent_type == "tabs":
+                cursor.insertText('\t')
+            else:
+                cursor.insertText(' ' * self.indent_size)
+        cursor.endEditBlock()
+    
+    def unindent_selected_lines(self):
+        """Unindent all selected lines"""
+        cursor = self.textCursor()
+        start = cursor.selectionStart()
+        end = cursor.selectionEnd()
+        
+        # Move to start of selection
+        cursor.setPosition(start)
+        cursor.movePosition(QTextCursor.StartOfLine)
+        start_block = cursor.blockNumber()
+        
+        # Move to end of selection
+        cursor.setPosition(end)
+        end_block = cursor.blockNumber()
+        
+        # Unindent each line
+        cursor.beginEditBlock()
+        for block_num in range(start_block, end_block + 1):
+            block = self.document().findBlockByNumber(block_num)
+            cursor.setPosition(block.position())
+            line_text = block.text()
+            
+            if self.indent_type == "tabs" and line_text.startswith('\t'):
+                cursor.deleteChar()
+            elif self.indent_type == "spaces":
+                spaces_to_remove = min(self.indent_size, len(line_text) - len(line_text.lstrip(' ')))
+                for _ in range(spaces_to_remove):
+                    if cursor.position() < block.position() + block.length() - 1:
+                        char = self.document().characterAt(cursor.position())
+                        if char == ' ':
+                            cursor.deleteChar()
+                        else:
+                            break
+        cursor.endEditBlock()
     
     def check_type_hint_insertion(self):
         """Check if we should insert type hint template"""
@@ -724,19 +872,321 @@ class CodeEditor(QPlainTextEdit):
                     self.highlight_line(line_num)
                     return
     
+    def jump_to_line(self, line_num):
+        """Jump to a specific line number (0-based)"""
+        if line_num < 0:
+            return
+        
+        cursor = QTextCursor(self.document().findBlockByLineNumber(line_num))
+        self.setTextCursor(cursor)
+        self.centerCursor()
+        self.highlight_line(line_num)
+    
     def highlight_line(self, line_num):
         """Briefly highlight a line"""
         cursor = QTextCursor(self.document().findBlockByLineNumber(line_num))
         cursor.select(QTextCursor.LineUnderCursor)
         
         selection = QTextEdit.ExtraSelection()
-        selection.format.setBackground(QColor("#3A3A3A"))
+        if self.is_dark_mode:
+            selection.format.setBackground(QColor("#3A3A3A"))
+        else:
+            selection.format.setBackground(QColor("#FFFF00"))
         selection.cursor = cursor
         
         self.setExtraSelections([selection])
         
-        from PySide6.QtCore import QTimer
         QTimer.singleShot(1000, lambda: self.setExtraSelections([]))
+
+
+class OutputConsole(QTextEdit):
+    """Custom output console with Ctrl+Click error navigation"""
+    
+    def __init__(self, editor, parent=None):
+        super().__init__(parent)
+        self.editor = editor
+        self.ctrl_pressed = False
+        self.setMouseTracking(True)
+        self.setReadOnly(True)
+        self.is_dark_mode = True
+        
+        # Set dark theme
+        font = QFont("Consolas", 9)
+        if not font.exactMatch():
+            font = QFont("Courier New", 9)
+        self.setFont(font)
+        self.apply_theme()
+    
+    def apply_theme(self):
+        """Apply current theme"""
+        if self.is_dark_mode:
+            self.setStyleSheet("background-color: #1E1E1E; color: #D4D4D4;")
+        else:
+            self.setStyleSheet("background-color: #FFFFFF; color: #000000;")
+    
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Control:
+            self.ctrl_pressed = True
+            self.viewport().setCursor(Qt.PointingHandCursor)
+        super().keyPressEvent(event)
+    
+    def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key_Control:
+            self.ctrl_pressed = False
+            self.viewport().setCursor(Qt.IBeamCursor)
+        super().keyReleaseEvent(event)
+    
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton and self.ctrl_pressed:
+            # Get the text cursor at click position
+            cursor = self.cursorForPosition(event.pos())
+            cursor.select(QTextCursor.LineUnderCursor)
+            line_text = cursor.selectedText()
+            
+            # Parse line number from error message
+            # Look for patterns like "line 123," or "line 123,"
+            match = re.search(r'line\s+(\d+)', line_text)
+            if match:
+                line_num = int(match.group(1))
+                # Jump to that line in the editor (convert to 0-based)
+                self.editor.jump_to_line(line_num - 1)
+                # Bring focus back to editor
+                self.editor.setFocus()
+                return
+        
+        super().mousePressEvent(event)
+    
+    def mouseMoveEvent(self, event):
+        if self.ctrl_pressed:
+            cursor = self.cursorForPosition(event.pos())
+            cursor.select(QTextCursor.LineUnderCursor)
+            line_text = cursor.selectedText()
+            
+            # Check if this line contains a line number reference
+            if re.search(r'line\s+\d+', line_text):
+                self.viewport().setCursor(Qt.PointingHandCursor)
+            else:
+                self.viewport().setCursor(Qt.IBeamCursor)
+        else:
+            self.viewport().setCursor(Qt.IBeamCursor)
+        
+        super().mouseMoveEvent(event)
+
+
+class FindDialog(QDialog):
+    """Find and Replace dialog"""
+    
+    def __init__(self, editor, parent=None):
+        super().__init__(parent)
+        self.editor = editor
+        self.last_match_pos = -1
+        self.init_ui()
+    
+    def init_ui(self):
+        """Initialize the UI"""
+        self.setWindowTitle("Find")
+        self.setModal(False)
+        layout = QVBoxLayout()
+        
+        # Find section
+        find_layout = QHBoxLayout()
+        find_layout.addWidget(QLabel("Find:"))
+        self.find_input = QLineEdit()
+        self.find_input.returnPressed.connect(self.find_next)
+        find_layout.addWidget(self.find_input)
+        layout.addLayout(find_layout)
+        
+        # Replace section
+        replace_layout = QHBoxLayout()
+        replace_layout.addWidget(QLabel("Replace:"))
+        self.replace_input = QLineEdit()
+        replace_layout.addWidget(self.replace_input)
+        layout.addLayout(replace_layout)
+        
+        # Options
+        options_layout = QHBoxLayout()
+        self.case_sensitive = QCheckBox("Case sensitive")
+        self.whole_word = QCheckBox("Whole words")
+        self.use_regex = QCheckBox("Regex")
+        options_layout.addWidget(self.case_sensitive)
+        options_layout.addWidget(self.whole_word)
+        options_layout.addWidget(self.use_regex)
+        layout.addLayout(options_layout)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        find_next_btn = QPushButton("Find Next")
+        find_next_btn.clicked.connect(self.find_next)
+        button_layout.addWidget(find_next_btn)
+        
+        find_prev_btn = QPushButton("Find Previous")
+        find_prev_btn.clicked.connect(self.find_previous)
+        button_layout.addWidget(find_prev_btn)
+        
+        replace_btn = QPushButton("Replace")
+        replace_btn.clicked.connect(self.replace_current)
+        button_layout.addWidget(replace_btn)
+        
+        replace_all_btn = QPushButton("Replace All")
+        replace_all_btn.clicked.connect(self.replace_all)
+        button_layout.addWidget(replace_all_btn)
+        
+        layout.addLayout(button_layout)
+        
+        # Status label
+        self.status_label = QLabel("")
+        layout.addWidget(self.status_label)
+        
+        self.setLayout(layout)
+        self.resize(500, 180)
+    
+    def get_search_flags(self):
+        """Get QTextDocument search flags"""
+        flags = QTextDocument.FindFlags()
+        if self.case_sensitive.isChecked():
+            flags |= QTextDocument.FindCaseSensitively
+        if self.whole_word.isChecked():
+            flags |= QTextDocument.FindWholeWords
+        return flags
+    
+    def find_next(self):
+        """Find next occurrence"""
+        search_text = self.find_input.text()
+        if not search_text:
+            self.status_label.setText("Enter search text")
+            return
+        
+        cursor = self.editor.textCursor()
+        
+        if self.use_regex.isChecked():
+            regex = QRegularExpression(search_text)
+            if not self.case_sensitive.isChecked():
+                regex.setPatternOptions(QRegularExpression.CaseInsensitiveOption)
+            found_cursor = self.editor.document().find(regex, cursor, self.get_search_flags())
+        else:
+            found_cursor = self.editor.document().find(search_text, cursor, self.get_search_flags())
+        
+        if found_cursor.isNull():
+            # Wrap around to beginning
+            cursor.movePosition(QTextCursor.Start)
+            if self.use_regex.isChecked():
+                regex = QRegularExpression(search_text)
+                if not self.case_sensitive.isChecked():
+                    regex.setPatternOptions(QRegularExpression.CaseInsensitiveOption)
+                found_cursor = self.editor.document().find(regex, cursor, self.get_search_flags())
+            else:
+                found_cursor = self.editor.document().find(search_text, cursor, self.get_search_flags())
+            
+            if found_cursor.isNull():
+                self.status_label.setText("Not found")
+                return
+            else:
+                self.status_label.setText("Wrapped to beginning")
+        else:
+            self.status_label.setText("")
+        
+        self.editor.setTextCursor(found_cursor)
+        self.editor.centerCursor()
+    
+    def find_previous(self):
+        """Find previous occurrence"""
+        search_text = self.find_input.text()
+        if not search_text:
+            self.status_label.setText("Enter search text")
+            return
+        
+        cursor = self.editor.textCursor()
+        cursor.movePosition(QTextCursor.Start, QTextCursor.MoveAnchor)
+        cursor.movePosition(QTextCursor.End, QTextCursor.KeepAnchor)
+        current_pos = self.editor.textCursor().selectionStart()
+        
+        flags = self.get_search_flags()
+        flags |= QTextDocument.FindBackward
+        
+        cursor = self.editor.textCursor()
+        
+        if self.use_regex.isChecked():
+            regex = QRegularExpression(search_text)
+            if not self.case_sensitive.isChecked():
+                regex.setPatternOptions(QRegularExpression.CaseInsensitiveOption)
+            found_cursor = self.editor.document().find(regex, cursor, flags)
+        else:
+            found_cursor = self.editor.document().find(search_text, cursor, flags)
+        
+        if found_cursor.isNull():
+            # Wrap around to end
+            cursor.movePosition(QTextCursor.End)
+            if self.use_regex.isChecked():
+                regex = QRegularExpression(search_text)
+                if not self.case_sensitive.isChecked():
+                    regex.setPatternOptions(QRegularExpression.CaseInsensitiveOption)
+                found_cursor = self.editor.document().find(regex, cursor, flags)
+            else:
+                found_cursor = self.editor.document().find(search_text, cursor, flags)
+            
+            if found_cursor.isNull():
+                self.status_label.setText("Not found")
+                return
+            else:
+                self.status_label.setText("Wrapped to end")
+        else:
+            self.status_label.setText("")
+        
+        self.editor.setTextCursor(found_cursor)
+        self.editor.centerCursor()
+    
+    def replace_current(self):
+        """Replace current selection"""
+        cursor = self.editor.textCursor()
+        if cursor.hasSelection():
+            replace_text = self.replace_input.text()
+            cursor.insertText(replace_text)
+            self.status_label.setText("Replaced")
+            self.find_next()
+    
+    def replace_all(self):
+        """Replace all occurrences"""
+        search_text = self.find_input.text()
+        replace_text = self.replace_input.text()
+        
+        if not search_text:
+            self.status_label.setText("Enter search text")
+            return
+        
+        cursor = self.editor.textCursor()
+        cursor.beginEditBlock()
+        
+        cursor.movePosition(QTextCursor.Start)
+        self.editor.setTextCursor(cursor)
+        
+        count = 0
+        flags = self.get_search_flags()
+        
+        while True:
+            if self.use_regex.isChecked():
+                regex = QRegularExpression(search_text)
+                if not self.case_sensitive.isChecked():
+                    regex.setPatternOptions(QRegularExpression.CaseInsensitiveOption)
+                found_cursor = self.editor.document().find(regex, cursor, flags)
+            else:
+                found_cursor = self.editor.document().find(search_text, cursor, flags)
+            
+            if found_cursor.isNull():
+                break
+            
+            found_cursor.insertText(replace_text)
+            cursor = found_cursor
+            count += 1
+        
+        cursor.endEditBlock()
+        self.status_label.setText(f"Replaced {count} occurrence(s)")
+    
+    def showEvent(self, event):
+        """When dialog is shown, select text in find input and focus it"""
+        super().showEvent(event)
+        self.find_input.setFocus()
+        self.find_input.selectAll()
 
 
 class PythonEditor(QMainWindow):
@@ -747,6 +1197,7 @@ class PythonEditor(QMainWindow):
         
         self.current_file = None
         self.process = None
+        self.find_dialog = None
         self.init_ui()
     
     def init_ui(self):
@@ -761,15 +1212,8 @@ class PythonEditor(QMainWindow):
         self.editor = CodeEditor()
         splitter.addWidget(self.editor)
         
-        # Create output console
-        self.output = QTextEdit()
-        self.output.setReadOnly(True)
-        self.output.setMaximumHeight(200)
-        font = QFont("Consolas", 9)
-        if not font.exactMatch():
-            font = QFont("Courier New", 9)
-        self.output.setFont(font)
-        self.output.setStyleSheet("background-color: #1E1E1E; color: #D4D4D4;")
+        # Create output console with error navigation
+        self.output = OutputConsole(self.editor)
         splitter.addWidget(self.output)
         
         # Set splitter sizes
@@ -826,11 +1270,27 @@ class PythonEditor(QMainWindow):
         validate_action.triggered.connect(self.validate_syntax)
         toolbar.addAction(validate_action)
         
+        toolbar.addSeparator()
+        
+        # Find action
+        find_action = QAction("Find", self)
+        find_action.setShortcut("Ctrl+F")
+        find_action.triggered.connect(self.show_find_dialog)
+        toolbar.addAction(find_action)
+        
         # Go to line action
         goto_action = QAction("Go to Line", self)
         goto_action.setShortcut("Ctrl+G")
         goto_action.triggered.connect(self.go_to_line)
         toolbar.addAction(goto_action)
+        
+        toolbar.addSeparator()
+        
+        # Theme toggle action
+        self.theme_action = QAction("🌙 Dark Mode", self)
+        self.theme_action.triggered.connect(self.toggle_theme)
+        toolbar.addAction(self.theme_action)
+        self.update_theme_button()
         
         toolbar.addSeparator()
         
@@ -883,6 +1343,41 @@ class PythonEditor(QMainWindow):
             self.indent_action.setText(f"Indent: Spaces ({self.editor.indent_size})")
         else:
             self.indent_action.setText("Indent: Tabs")
+    
+    def show_find_dialog(self):
+        """Show the find/replace dialog"""
+        if self.find_dialog is None:
+            self.find_dialog = FindDialog(self.editor, self)
+        
+        # Get selected text if any
+        cursor = self.editor.textCursor()
+        if cursor.hasSelection():
+            self.find_dialog.find_input.setText(cursor.selectedText())
+        
+        self.find_dialog.show()
+        self.find_dialog.raise_()
+        self.find_dialog.activateWindow()
+    
+    def toggle_theme(self):
+        """Toggle between light and dark theme"""
+        self.editor.toggle_theme()
+        self.output.is_dark_mode = self.editor.is_dark_mode
+        self.output.apply_theme()
+        
+        # Update main window palette
+        if self.editor.is_dark_mode:
+            set_dark_palette(QApplication.instance())
+        else:
+            set_light_palette(QApplication.instance())
+        
+        self.update_theme_button()
+    
+    def update_theme_button(self):
+        """Update theme button text"""
+        if self.editor.is_dark_mode:
+            self.theme_action.setText("☀️ Light Mode")
+        else:
+            self.theme_action.setText("🌙 Dark Mode")
     
     def clear_output(self):
         """Clear the output console"""
@@ -1144,9 +1639,77 @@ class PythonEditor(QMainWindow):
             event.reject()
 
 
+def set_light_palette(app):
+    """Set light theme palette for the entire application"""
+    palette = QPalette()
+    
+    # Base colors
+    palette.setColor(QPalette.Window, QColor("#F0F0F0"))
+    palette.setColor(QPalette.WindowText, QColor("#000000"))
+    palette.setColor(QPalette.Base, QColor("#FFFFFF"))
+    palette.setColor(QPalette.AlternateBase, QColor("#F5F5F5"))
+    palette.setColor(QPalette.ToolTipBase, QColor("#FFFFCC"))
+    palette.setColor(QPalette.ToolTipText, QColor("#000000"))
+    palette.setColor(QPalette.Text, QColor("#000000"))
+    palette.setColor(QPalette.Button, QColor("#E1E1E1"))
+    palette.setColor(QPalette.ButtonText, QColor("#000000"))
+    palette.setColor(QPalette.BrightText, Qt.red)
+    palette.setColor(QPalette.Link, QColor("#0000FF"))
+    palette.setColor(QPalette.Highlight, QColor("#308CC6"))
+    palette.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
+    
+    # Disabled colors
+    palette.setColor(QPalette.Disabled, QPalette.WindowText, QColor("#808080"))
+    palette.setColor(QPalette.Disabled, QPalette.Text, QColor("#808080"))
+    palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#808080"))
+    palette.setColor(QPalette.Disabled, QPalette.HighlightedText, QColor("#808080"))
+    
+    app.setPalette(palette)
+
+
+def set_dark_palette(app):
+    """Set dark theme palette for the entire application"""
+    palette = QPalette()
+    
+    # Base colors
+    palette.setColor(QPalette.Window, QColor("#1E1E1E"))
+    palette.setColor(QPalette.WindowText, QColor("#D4D4D4"))
+    palette.setColor(QPalette.Base, QColor("#1E1E1E"))
+    palette.setColor(QPalette.AlternateBase, QColor("#2B2B2B"))
+    palette.setColor(QPalette.ToolTipBase, QColor("#1E1E1E"))
+    palette.setColor(QPalette.ToolTipText, QColor("#D4D4D4"))
+    palette.setColor(QPalette.Text, QColor("#D4D4D4"))
+    palette.setColor(QPalette.Button, QColor("#2B2B2B"))
+    palette.setColor(QPalette.ButtonText, QColor("#D4D4D4"))
+    palette.setColor(QPalette.BrightText, Qt.red)
+    palette.setColor(QPalette.Link, QColor("#6897BB"))
+    palette.setColor(QPalette.Highlight, QColor("#214283"))
+    palette.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
+    
+    # Disabled colors
+    palette.setColor(QPalette.Disabled, QPalette.WindowText, QColor("#808080"))
+    palette.setColor(QPalette.Disabled, QPalette.Text, QColor("#808080"))
+    palette.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#808080"))
+    palette.setColor(QPalette.Disabled, QPalette.HighlightedText, QColor("#808080"))
+    
+    app.setPalette(palette)
+
+
 def main():
     app = QApplication(sys.argv)
+    
+    # Set Fusion style
+    app.setStyle("Fusion")
+    
+    # Create editor first to check theme preference
     editor = PythonEditor()
+    
+    # Set theme based on editor preference
+    if editor.editor.is_dark_mode:
+        set_dark_palette(app)
+    else:
+        set_light_palette(app)
+    
     editor.show()
     sys.exit(app.exec())
 
