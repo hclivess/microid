@@ -7,6 +7,7 @@ Features:
 - Maintains indent type consistency
 - Code execution
 - Syntax validation
+- Line numbers display
 """
 
 import sys
@@ -16,10 +17,10 @@ import subprocess
 import tempfile
 from PySide6.QtWidgets import (QApplication, QMainWindow, QPlainTextEdit, 
                                QFileDialog, QMessageBox, QToolBar, QStatusBar,
-                               QTextEdit, QSplitter, QCompleter, QInputDialog)
-from PySide6.QtCore import Qt, QRegularExpression, QProcess, QStringListModel
+                               QTextEdit, QSplitter, QCompleter, QInputDialog, QWidget)
+from PySide6.QtCore import Qt, QRegularExpression, QProcess, QStringListModel, QRect
 from PySide6.QtGui import (QSyntaxHighlighter, QTextCharFormat, QColor, 
-                          QFont, QKeyEvent, QAction, QTextCursor)
+                          QFont, QKeyEvent, QAction, QTextCursor, QPainter)
 
 
 class PythonHighlighter(QSyntaxHighlighter):
@@ -67,7 +68,6 @@ class PythonHighlighter(QSyntaxHighlighter):
         type_format = QTextCharFormat()
         type_format.setForeground(QColor("#8888C6"))
         
-        # Define highlighting rules as (pattern, format)
         self.highlighting_rules = []
         
         # Keywords (highest priority)
@@ -95,7 +95,7 @@ class PythonHighlighter(QSyntaxHighlighter):
         builtin_pattern = r'\b(' + '|'.join(builtins) + r')\b'
         self.highlighting_rules.append((QRegularExpression(builtin_pattern), builtin_format))
         
-        # Type annotations (typing module and built-in generics)
+        # Type annotations
         type_hints = [
             'List', 'Dict', 'Set', 'Tuple', 'Optional', 'Union', 'Any', 'Callable',
             'Iterable', 'Iterator', 'Sequence', 'Mapping', 'Type', 'TypeVar',
@@ -140,13 +140,12 @@ class PythonHighlighter(QSyntaxHighlighter):
             class_format
         ))
         
-        # Comments (must come last in rules)
+        # Comments
         self.highlighting_rules.append((
             QRegularExpression(r'#[^\n]*'),
             comment_format
         ))
         
-        # Store formats for strings
         self.string_format = string_format
         self.fstring_brace_format = fstring_brace_format
         self.tri_single_format = string_format
@@ -155,7 +154,6 @@ class PythonHighlighter(QSyntaxHighlighter):
     def highlightBlock(self, text):
         """Apply syntax highlighting to a block of text"""
         
-        # First handle multi-line strings
         self.setCurrentBlockState(0)
         
         # Check for continuation of triple-quoted strings
@@ -188,10 +186,10 @@ class PythonHighlighter(QSyntaxHighlighter):
                     self.setCurrentBlockState(1)
                     return
         
-        # Handle single-line strings (including f-strings)
+        # Handle single-line strings
         self.highlight_strings(text)
         
-        # Apply regular highlighting rules (after strings so keywords in strings aren't highlighted)
+        # Apply regular highlighting rules
         for pattern, format_style in self.highlighting_rules:
             match_iterator = pattern.globalMatch(text)
             while match_iterator.hasNext():
@@ -199,7 +197,6 @@ class PythonHighlighter(QSyntaxHighlighter):
                 start = match.capturedStart()
                 length = match.capturedLength()
                 
-                # Don't override string formatting
                 if self.format(start).foreground().color() != self.string_format.foreground().color():
                     self.setFormat(start, length, format_style)
     
@@ -207,13 +204,11 @@ class PythonHighlighter(QSyntaxHighlighter):
         """Highlight string literals including f-strings"""
         i = 0
         while i < len(text):
-            # Check for f-string
             if i < len(text) - 1 and text[i] in 'fFrRbBuU':
                 prefix = text[i]
                 quote_char = text[i + 1] if i + 1 < len(text) else None
                 
                 if quote_char in ['"', "'"]:
-                    # Find string end
                     start = i
                     i += 2
                     is_fstring = prefix in 'fF'
@@ -223,10 +218,8 @@ class PythonHighlighter(QSyntaxHighlighter):
                             i += 2
                             continue
                         elif text[i] == quote_char:
-                            # Found end of string
                             self.setFormat(start, i - start + 1, self.string_format)
                             
-                            # If f-string, highlight braces
                             if is_fstring:
                                 self.highlight_fstring_braces(text, start, i + 1)
                             
@@ -235,7 +228,6 @@ class PythonHighlighter(QSyntaxHighlighter):
                         i += 1
                     continue
             
-            # Regular strings
             elif text[i] in ['"', "'"]:
                 quote_char = text[i]
                 start = i
@@ -259,7 +251,6 @@ class PythonHighlighter(QSyntaxHighlighter):
         i = start
         while i < end:
             if text[i] == '{' and (i + 1 >= end or text[i + 1] != '{'):
-                # Find matching closing brace
                 brace_start = i
                 depth = 1
                 i += 1
@@ -270,20 +261,29 @@ class PythonHighlighter(QSyntaxHighlighter):
                     elif text[i] == '}':
                         depth -= 1
                         if depth == 0:
-                            # Highlight the braces
                             self.setFormat(brace_start, 1, self.fstring_brace_format)
                             self.setFormat(i, 1, self.fstring_brace_format)
                     i += 1
                 continue
             elif text[i] == '}' and (i + 1 >= end or text[i + 1] != '}'):
-                # Closing brace
                 self.setFormat(i, 1, self.fstring_brace_format)
             
             i += 1
 
 
+class LineNumberArea(QWidget):
+    """Widget for displaying line numbers"""
+    
+    def __init__(self, editor):
+        super().__init__(editor)
+        self.editor = editor
+
+    def paintEvent(self, event):
+        self.editor.lineNumberAreaPaintEvent(event)
+
+
 class CodeEditor(QPlainTextEdit):
-    """Custom text editor with smart indentation"""
+    """Custom text editor with smart indentation and line numbers"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -293,6 +293,9 @@ class CodeEditor(QPlainTextEdit):
         if not font.exactMatch():
             font = QFont("Courier New", 10)
         self.setFont(font)
+        
+        # Set dark background
+        self.setStyleSheet("background-color: #1E1E1E; color: #D4D4D4;")
         
         # Set tab behavior
         self.setTabStopDistance(40)  # 4 spaces equivalent
@@ -304,6 +307,17 @@ class CodeEditor(QPlainTextEdit):
         
         # Initialize highlighter
         self.highlighter = PythonHighlighter(self.document())
+        
+        # Setup line number area
+        self.line_number_area = LineNumberArea(self)
+        
+        # Connect signals for line numbers
+        self.blockCountChanged.connect(self.updateLineNumberAreaWidth)
+        self.updateRequest.connect(self.updateLineNumberArea)
+        self.cursorPositionChanged.connect(self.updateLineNumberArea)
+        
+        # Set initial viewport margins
+        self.updateLineNumberAreaWidth(0)
         
         # Setup autocomplete
         self.completer = QCompleter(self)
@@ -325,9 +339,79 @@ class CodeEditor(QPlainTextEdit):
         self.ctrl_pressed = False
         self.setMouseTracking(True)
     
+    def lineNumberAreaWidth(self):
+        """Calculate width needed for line numbers"""
+        digits = 1
+        max_num = max(1, self.blockCount())
+        while max_num >= 10:
+            max_num //= 10
+            digits += 1
+        
+        font_metrics = self.fontMetrics()
+        space = 3 + font_metrics.horizontalAdvance('9') * digits
+        return space
+    
+    def updateLineNumberAreaWidth(self, _):
+        """Update viewport margins when line count changes"""
+        self.setViewportMargins(self.lineNumberAreaWidth(), 0, 0, 0)
+    
+    def updateLineNumberArea(self, rect, dy):
+        """Update line number area when editor scrolls"""
+        if dy:
+            self.line_number_area.scroll(0, dy)
+        else:
+            self.line_number_area.update(0, rect.y(), 
+                                       self.lineNumberAreaWidth(), rect.height())
+        
+        if rect.contains(self.viewport().rect()):
+            self.updateLineNumberAreaWidth(0)
+    
+    def resizeEvent(self, event):
+        """Handle resize events"""
+        super().resizeEvent(event)
+        cr = self.contentsRect()
+        self.line_number_area.setGeometry(
+            QRect(cr.left(), cr.top(), 
+                  self.lineNumberAreaWidth(), cr.height())
+        )
+    
+    def lineNumberAreaPaintEvent(self, event):
+        """Paint line numbers"""
+        painter = QPainter(self.line_number_area)
+        painter.fillRect(event.rect(), QColor("#2B2B2B"))  # Slightly darker than editor
+        
+        block = self.firstVisibleBlock()
+        block_number = block.blockNumber()
+        top = self.blockBoundingGeometry(block).translated(self.contentOffset()).top()
+        bottom = top + self.blockBoundingRect(block).height()
+        
+        font_metrics = self.fontMetrics()
+        current_block_number = self.textCursor().blockNumber()
+        
+        while block.isValid() and top <= event.rect().bottom():
+            if block.isVisible() and bottom >= event.rect().top():
+                number = str(block_number + 1)
+                
+                # Highlight current line number
+                if block_number == current_block_number:
+                    painter.fillRect(0, int(top), self.lineNumberAreaWidth(), 
+                                   font_metrics.height(), 
+                                   QColor("#3A3A3A"))
+                    painter.setPen(QColor("#D4D4D4"))  # Bright for current line
+                else:
+                    painter.setPen(QColor("#606366"))  # Dim for other lines
+                
+                painter.drawText(0, int(top), self.lineNumberAreaWidth(), 
+                               font_metrics.height(),
+                               Qt.AlignRight, number)
+            
+            block = block.next()
+            top = bottom
+            bottom = top + self.blockBoundingRect(block).height()
+            block_number += 1
+    
     def on_cursor_position_changed(self):
         """Emit signal when cursor position changes"""
-        # This will be connected to the main window to update status bar
         pass
     
     def detect_indentation(self):
@@ -343,7 +427,6 @@ class CodeEditor(QPlainTextEdit):
             if not line.strip():
                 continue
             
-            # Count leading spaces/tabs
             leading_spaces = len(line) - len(line.lstrip(' '))
             leading_tabs = len(line) - len(line.lstrip('\t'))
             
@@ -351,19 +434,15 @@ class CodeEditor(QPlainTextEdit):
                 tabs_count += 1
             elif leading_spaces > 0:
                 spaces_count += 1
-                # Track indent sizes
-                if leading_spaces % 2 == 0:  # Valid indent
+                if leading_spaces % 2 == 0:
                     indent_sizes.append(leading_spaces)
         
-        # Determine indent type
         if tabs_count > spaces_count:
             self.indent_type = "tabs"
             self.indent_size = 1
         else:
             self.indent_type = "spaces"
-            # Determine most common indent size
             if indent_sizes:
-                # Find GCD-like pattern
                 from collections import Counter
                 size_diffs = []
                 sorted_sizes = sorted(set(indent_sizes))
@@ -374,7 +453,9 @@ class CodeEditor(QPlainTextEdit):
                     common_diff = Counter(size_diffs).most_common(1)[0][0]
                     self.indent_size = common_diff
                 else:
-                    self.indent_size = 4  # Default
+                    self.indent_size = 4
+            else:
+                self.indent_size = 4
     
     def get_line_indentation(self, line_text):
         """Get indentation level of a line"""
@@ -390,21 +471,18 @@ class CodeEditor(QPlainTextEdit):
         identifiers = set()
         
         # Extract using regex for quick parsing
-        # Function definitions
         for match in re.finditer(r'\bdef\s+(\w+)', code):
             identifiers.add(match.group(1))
         
-        # Class definitions
         for match in re.finditer(r'\bclass\s+(\w+)', code):
             identifiers.add(match.group(1))
         
-        # Variable assignments (simple cases)
         for match in re.finditer(r'\b([a-zA-Z_]\w*)\s*=', code):
             identifiers.add(match.group(1))
         
-        # Import statements
         for match in re.finditer(r'\bimport\s+(\w+)', code):
             identifiers.add(match.group(1))
+        
         for match in re.finditer(r'\bfrom\s+\w+\s+import\s+(\w+)', code):
             identifiers.add(match.group(1))
         
@@ -419,29 +497,17 @@ class CodeEditor(QPlainTextEdit):
                    'sum', 'min', 'max', 'abs', 'all', 'any', 'sorted', 'reversed',
                    'isinstance', 'issubclass', 'hasattr', 'getattr', 'setattr']
         
-        # Type hints and typing module
         type_hints = [
             'List', 'Dict', 'Set', 'Tuple', 'Optional', 'Union', 'Any', 'Callable',
             'Iterable', 'Iterator', 'Sequence', 'Mapping', 'Type', 'TypeVar',
             'Generic', 'Protocol', 'Literal', 'Final', 'ClassVar', 'cast',
-            'list', 'dict', 'set', 'tuple',  # lowercase for Python 3.9+
+            'list', 'dict', 'set', 'tuple',
         ]
         
-        # Common return type patterns
         return_patterns = [
-            '-> None:',
-            '-> str:',
-            '-> int:',
-            '-> float:',
-            '-> bool:',
-            '-> list:',
-            '-> dict:',
-            '-> tuple:',
-            '-> List[str]:',
-            '-> List[int]:',
-            '-> Dict[str, Any]:',
-            '-> Optional[str]:',
-            '-> Optional[int]:',
+            '-> None:', '-> str:', '-> int:', '-> float:', '-> bool:',
+            '-> list:', '-> dict:', '-> tuple:', '-> List[str]:', '-> List[int]:',
+            '-> Dict[str, Any]:', '-> Optional[str]:', '-> Optional[int]:',
         ]
         
         identifiers.update(keywords)
@@ -449,21 +515,17 @@ class CodeEditor(QPlainTextEdit):
         identifiers.update(type_hints)
         identifiers.update(return_patterns)
         
-        # Update model
         self.completion_model.setStringList(sorted(identifiers))
     
     def insert_completion(self, completion):
         """Insert the selected completion"""
         cursor = self.textCursor()
         
-        # Get the prefix that was typed
         prefix = self.completer.completionPrefix()
         
-        # Delete the prefix
         for _ in range(len(prefix)):
             cursor.deletePreviousChar()
         
-        # Insert the full completion
         cursor.insertText(completion)
         self.setTextCursor(cursor)
     
@@ -483,14 +545,11 @@ class CodeEditor(QPlainTextEdit):
     def keyPressEvent(self, event: QKeyEvent):
         """Handle key press events for smart indentation and autocomplete"""
         
-        # Track Ctrl key
         if event.key() == Qt.Key_Control:
             self.ctrl_pressed = True
             self.viewport().setCursor(Qt.IBeamCursor)
         
-        # Handle completer popup
         if self.completer.popup().isVisible():
-            # Keys that should be handled by completer
             if event.key() in (Qt.Key_Enter, Qt.Key_Return):
                 event.ignore()
                 return
@@ -502,40 +561,30 @@ class CodeEditor(QPlainTextEdit):
                 event.ignore()
                 return
         
-        # Auto-detect indentation on first edit
         if self.auto_detect_indent and self.toPlainText():
             self.detect_indentation()
             self.auto_detect_indent = False
         
         cursor = self.textCursor()
         
-        # Handle Return/Enter key
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
             cursor = self.textCursor()
-            
-            # Get current line for indent calculation
             cursor.select(QTextCursor.LineUnderCursor)
             current_line = cursor.selectedText()
             
-            # Calculate base indentation from current line
             indent_level = self.get_line_indentation(current_line)
-            
-            # Check if line ends with colon (increase indent)
             stripped_line = current_line.rstrip()
             if stripped_line.endswith(':'):
                 indent_level += 1
             
-            # Reset cursor and insert newline
             cursor = self.textCursor()
             super().keyPressEvent(event)
             
-            # Add indentation to new line
             indent_str = self.create_indent_string(indent_level)
             self.insertPlainText(indent_str)
             
             return
         
-        # Handle Tab key
         elif event.key() == Qt.Key_Tab:
             if self.indent_type == "tabs":
                 self.insertPlainText('\t')
@@ -543,7 +592,6 @@ class CodeEditor(QPlainTextEdit):
                 self.insertPlainText(' ' * self.indent_size)
             return
         
-        # Handle Shift+Tab (dedent)
         elif event.key() == Qt.Key_Backtab:
             cursor = self.textCursor()
             cursor.select(QTextCursor.LineUnderCursor)
@@ -562,7 +610,6 @@ class CodeEditor(QPlainTextEdit):
             
             return
         
-        # Handle Backspace at start of line (smart dedent)
         elif event.key() == Qt.Key_Backspace:
             cursor = self.textCursor()
             cursor.select(QTextCursor.LineUnderCursor)
@@ -570,40 +617,32 @@ class CodeEditor(QPlainTextEdit):
             
             pos = self.textCursor().positionInBlock()
             
-            # If we're in the indentation area
             if pos > 0 and line[:pos].strip() == '':
                 if self.indent_type == "spaces" and pos >= self.indent_size:
-                    # Check if we can delete a full indent
                     if pos % self.indent_size == 0:
                         cursor = self.textCursor()
                         for _ in range(self.indent_size):
                             cursor.deletePreviousChar()
                         return
         
-        # Default behavior
         super().keyPressEvent(event)
         
-        # Check for type hint template insertion
         if event.text() == ':' or event.text() == ')':
             self.check_type_hint_insertion()
         
-        # Trigger autocomplete only when typing new text
         cursor = self.textCursor()
-        
-        # Don't trigger if there's text immediately after cursor (in middle of word)
         cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor)
         if cursor.selectedText().strip():
             self.completer.popup().hide()
             return
         
         completion_prefix = self.text_under_cursor()
-        if len(completion_prefix) >= 2:  # Start autocomplete after 2 characters
+        if len(completion_prefix) >= 2:
             if completion_prefix != self.completer.completionPrefix():
                 self.completer.setCompletionPrefix(completion_prefix)
                 popup = self.completer.popup()
                 popup.setCurrentIndex(self.completer.completionModel().index(0, 0))
             
-            # Position and show popup
             cursor_rect = self.cursorRect()
             cursor_rect.setWidth(self.completer.popup().sizeHintForColumn(0)
                                + self.completer.popup().verticalScrollBar().sizeHint().width())
@@ -617,11 +656,8 @@ class CodeEditor(QPlainTextEdit):
         cursor.select(QTextCursor.LineUnderCursor)
         line = cursor.selectedText()
         
-        # Check if this is a function definition without return type
         if re.match(r'^\s*def\s+\w+\([^)]*\)\s*:\s*$', line):
-            # Check if there's already a return type annotation
             if '->' not in line:
-                # Move cursor before the colon
                 cursor = self.textCursor()
                 block_text = cursor.block().text()
                 colon_pos = block_text.rfind(':')
@@ -629,7 +665,7 @@ class CodeEditor(QPlainTextEdit):
                     cursor.movePosition(QTextCursor.StartOfLine)
                     cursor.movePosition(QTextCursor.Right, QTextCursor.MoveAnchor, colon_pos)
                     cursor.insertText(' -> None')
-                    cursor.movePosition(QTextCursor.Right)  # Move past the colon
+                    cursor.movePosition(QTextCursor.Right)
                     self.setTextCursor(cursor)
     
     def mousePressEvent(self, event):
@@ -652,7 +688,6 @@ class CodeEditor(QPlainTextEdit):
             cursor.select(QTextCursor.WordUnderCursor)
             word = cursor.selectedText()
             
-            # Check if word is an identifier
             if word and re.match(r'^[a-zA-Z_]\w*$', word):
                 self.viewport().setCursor(Qt.PointingHandCursor)
             else:
@@ -674,39 +709,32 @@ class CodeEditor(QPlainTextEdit):
         code = self.toPlainText()
         lines = code.split('\n')
         
-        # Search for function or class definition
         patterns = [
             rf'^\s*def\s+{re.escape(identifier)}\s*\(',
             rf'^\s*class\s+{re.escape(identifier)}\s*[\(:]',
-            rf'^\s*{re.escape(identifier)}\s*=',  # Variable assignment
+            rf'^\s*{re.escape(identifier)}\s*=',
         ]
         
         for line_num, line in enumerate(lines):
             for pattern in patterns:
                 if re.search(pattern, line):
-                    # Found definition, jump to it
                     cursor = QTextCursor(self.document().findBlockByLineNumber(line_num))
                     self.setTextCursor(cursor)
                     self.centerCursor()
-                    
-                    # Briefly highlight the line
                     self.highlight_line(line_num)
                     return
     
     def highlight_line(self, line_num):
         """Briefly highlight a line"""
-        # Select the line
         cursor = QTextCursor(self.document().findBlockByLineNumber(line_num))
         cursor.select(QTextCursor.LineUnderCursor)
         
-        # Create selection with highlight
         selection = QTextEdit.ExtraSelection()
         selection.format.setBackground(QColor("#3A3A3A"))
         selection.cursor = cursor
         
         self.setExtraSelections([selection])
         
-        # Clear highlight after 1 second
         from PySide6.QtCore import QTimer
         QTimer.singleShot(1000, lambda: self.setExtraSelections([]))
 
@@ -839,23 +867,18 @@ class PythonEditor(QMainWindow):
     
     def update_status_bar(self):
         """Update status bar and indent button with current settings"""
-        # Get cursor position
         cursor = self.editor.textCursor()
         line = cursor.blockNumber() + 1
         col = cursor.columnNumber() + 1
         
-        # Get total lines and characters
         total_lines = self.editor.document().blockCount()
         total_chars = len(self.editor.toPlainText())
         
-        # Get indent info
         indent_info = f"{self.editor.indent_type.capitalize()} ({self.editor.indent_size})"
         
-        # Build status message
         status = f"Line {line}/{total_lines} | Col {col} | {total_chars} chars | Indent: {indent_info}"
         self.statusBar.showMessage(status)
         
-        # Update button text
         if self.editor.indent_type == "spaces":
             self.indent_action.setText(f"Indent: Spaces ({self.editor.indent_size})")
         else:
@@ -869,19 +892,15 @@ class PythonEditor(QMainWindow):
         """Add 'from typing import' statement at top of file"""
         code = self.editor.toPlainText()
         
-        # Check if typing import already exists
         if re.search(r'from\s+typing\s+import', code):
             self.append_output("Typing import already exists", "#FFC66D")
             return
         
-        # Common typing imports
         typing_imports = "from typing import List, Dict, Optional, Union, Any, Tuple, Set, Callable"
         
-        # Find where to insert (after any existing imports or at top)
         lines = code.split('\n')
         insert_line = 0
         
-        # Skip shebang and docstrings
         in_docstring = False
         for i, line in enumerate(lines):
             if i == 0 and line.startswith('#!'):
@@ -897,14 +916,11 @@ class PythonEditor(QMainWindow):
             if in_docstring:
                 continue
             
-            # Find last import
             if line.strip().startswith('import ') or line.strip().startswith('from '):
                 insert_line = i + 1
             elif line.strip() and not line.strip().startswith('#'):
-                # First non-import, non-comment line
                 break
         
-        # Insert the import
         lines.insert(insert_line, typing_imports)
         self.editor.setPlainText('\n'.join(lines))
         self.append_output("Added typing imports", "#6A8759")
@@ -925,12 +941,9 @@ class PythonEditor(QMainWindow):
         )
         
         if ok:
-            # Move cursor to the specified line
             cursor = QTextCursor(self.editor.document().findBlockByLineNumber(line_num - 1))
             self.editor.setTextCursor(cursor)
             self.editor.centerCursor()
-            
-            # Briefly highlight the line
             self.editor.highlight_line(line_num - 1)
     
     def append_output(self, text, color="#D4D4D4"):
@@ -973,7 +986,6 @@ class PythonEditor(QMainWindow):
             self.append_output("No code to run.", "#FFC66D")
             return
         
-        # First validate syntax
         try:
             ast.parse(code)
         except SyntaxError as e:
@@ -987,19 +999,16 @@ class PythonEditor(QMainWindow):
         self.append_output("Running code...", "#6897BB")
         self.append_output("", "#D4D4D4")
         
-        # Save code to temporary file
         try:
             with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
                 f.write(code)
                 temp_file = f.name
             
-            # Create process
             self.process = QProcess(self)
             self.process.readyReadStandardOutput.connect(self.handle_stdout)
             self.process.readyReadStandardError.connect(self.handle_stderr)
             self.process.finished.connect(lambda: self.handle_finished(temp_file))
             
-            # Start process
             self.process.start(sys.executable, [temp_file])
             
         except Exception as e:
@@ -1031,7 +1040,6 @@ class PythonEditor(QMainWindow):
                 self.append_output(f"Process finished with exit code {exit_code}", "#FF6B6B")
             self.append_output("=" * 50, "#808080")
             
-            # Clean up temp file
             try:
                 import os
                 os.unlink(temp_file)
