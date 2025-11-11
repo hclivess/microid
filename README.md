@@ -1,4 +1,6 @@
-# microid
+# Microid
+
+![img](thumb.png)
 
 A minimalistic Python editor with full indentation handling support. IDLE but better and faster. Ideal for working with AI-generated code.
 
@@ -17,7 +19,7 @@ A minimalistic Python editor with full indentation handling support. IDLE but be
 
 ```bash
 pip install PySide6
-python python_editor.py
+python microid.py
 ```
 
 ## Keyboard Shortcuts
