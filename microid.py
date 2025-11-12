@@ -1,21 +1,3 @@
-
-# !/usr/bin/env python3
-"""
-Minimalistic Python File Editor with Virtual Environment Support
-Features:
-- Complete dark/light mode UI with persistence
-- Syntax highlighting for Python code
-- Smart indentation (auto-detect tabs vs spaces)
-- Line numbers display
-- Code execution
-- Virtual environment management (create/select/activate)
-- Syntax validation
-- Ctrl+Click error navigation
-- Ctrl+F Find & Replace dialog
-- Multi-line Tab indent/unindent
-- Smart paste with proper indentation
-"""
-
 import sys
 import re
 import ast
@@ -28,10 +10,9 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QPlainTextEdit,
                                QTextEdit, QSplitter, QCompleter, QInputDialog, QWidget,
                                QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton,
                                QLabel, QCheckBox, QRadioButton, QButtonGroup, QGroupBox)
-from PySide6.QtCore import Qt, QRegularExpression, QProcess, QStringListModel, QRect, QTimer
+from PySide6.QtCore import Qt, QRegularExpression, QProcess, QStringListModel, QRect, QTimer, QUrl
 from PySide6.QtGui import (QSyntaxHighlighter, QTextCharFormat, QColor,
-                          QFont, QKeyEvent, QAction, QTextCursor, QPainter, QPalette, QTextDocument, QKeySequence)
-
+                           QFont, QKeyEvent, QAction, QTextCursor, QPainter, QPalette, QTextDocument, QKeySequence)
 
 
 class VenvDialog(QDialog):
@@ -591,6 +572,9 @@ class CodeEditor(QPlainTextEdit):
         # Track Ctrl key for jump to definition
         self.ctrl_pressed = False
         self.setMouseTracking(True)
+
+        # Enable drag and drop
+        self.setAcceptDrops(True)
 
     def load_theme_preference(self):
         """Load theme preference from file"""
@@ -1200,6 +1184,39 @@ class CodeEditor(QPlainTextEdit):
 
         QTimer.singleShot(1000, lambda: self.setExtraSelections([]))
 
+    def dragEnterEvent(self, event):
+        """Accept drag events with file URLs"""
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                if url.isLocalFile() and url.toLocalFile().endswith('.py'):
+                    event.acceptProposedAction()
+                    return
+
+    def dragMoveEvent(self, event):
+        """Accept drag move events"""
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                if url.isLocalFile() and url.toLocalFile().endswith('.py'):
+                    event.acceptProposedAction()
+                    return
+
+    def dropEvent(self, event):
+        """Handle drop events by opening the dropped Python file"""
+        if event.mimeData().hasUrls():
+            files = [url.toLocalFile() for url in event.mimeData().urls()
+                     if url.isLocalFile() and url.toLocalFile().endswith('.py')]
+
+            if files:
+                # Get the main window parent and load the file
+                parent = self.parent()
+                while parent and not isinstance(parent, PythonEditor):
+                    parent = parent.parent()
+
+                if parent and isinstance(parent, PythonEditor):
+                    if parent.maybe_save():
+                        parent.load_file(files[0])
+                    event.acceptProposedAction()
+
 
 class OutputConsole(QTextEdit):
     """Custom output console with Ctrl+Click error navigation"""
@@ -1506,6 +1523,9 @@ class PythonEditor(QMainWindow):
         self.active_venv = None
         self.load_venv_preference()
         self.init_ui()
+
+        # Enable drag and drop on main window
+        self.setAcceptDrops(True)
 
     def load_venv_preference(self):
         """Load venv preference from file"""
@@ -1933,6 +1953,24 @@ class PythonEditor(QMainWindow):
             self.editor.auto_detect_indent = True
             self.setWindowTitle("Microid")
 
+    def load_file(self, file_name):
+        """Load a file into the editor"""
+        try:
+            with open(file_name, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            self.editor.setPlainText(content)
+            self.current_file = file_name
+            self.editor.auto_detect_indent = True
+            self.editor.detect_indentation()
+            self.editor.document().setModified(False)
+            self.update_status_bar()
+            self.setWindowTitle(f"Microid - {file_name}")
+            return True
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not open file:\n{e}")
+            return False
+
     def open_file(self):
         """Open an existing file"""
         if self.maybe_save():
@@ -1941,19 +1979,7 @@ class PythonEditor(QMainWindow):
             )
 
             if file_name:
-                try:
-                    with open(file_name, 'r', encoding='utf-8') as f:
-                        content = f.read()
-
-                    self.editor.setPlainText(content)
-                    self.current_file = file_name
-                    self.editor.auto_detect_indent = True
-                    self.editor.detect_indentation()
-                    self.editor.document().setModified(False)
-                    self.update_status_bar()
-                    self.setWindowTitle(f"Microid - {file_name}")
-                except Exception as e:
-                    QMessageBox.critical(self, "Error", f"Could not open file:\n{e}")
+                self.load_file(file_name)
 
     def save_file(self):
         """Save the current file"""
@@ -2021,6 +2047,33 @@ class PythonEditor(QMainWindow):
             event.accept()
         else:
             event.reject()
+
+    def dragEnterEvent(self, event):
+        """Accept drag events with file URLs"""
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                if url.isLocalFile() and url.toLocalFile().endswith('.py'):
+                    event.acceptProposedAction()
+                    return
+
+    def dragMoveEvent(self, event):
+        """Accept drag move events"""
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                if url.isLocalFile() and url.toLocalFile().endswith('.py'):
+                    event.acceptProposedAction()
+                    return
+
+    def dropEvent(self, event):
+        """Handle drop events by opening the dropped Python file"""
+        if event.mimeData().hasUrls():
+            files = [url.toLocalFile() for url in event.mimeData().urls()
+                     if url.isLocalFile() and url.toLocalFile().endswith('.py')]
+
+            if files:
+                if self.maybe_save():
+                    self.load_file(files[0])
+                event.acceptProposedAction()
 
 
 def set_light_palette(app):
