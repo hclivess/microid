@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Minimalistic Python File Editor
+Minimalistic Python File Editor with Virtual Environment Support
 Features:
 - Complete dark/light mode UI with persistence
 - Syntax highlighting for Python code
 - Smart indentation (auto-detect tabs vs spaces)
 - Line numbers display
 - Code execution
+- Virtual environment management (create/select/activate)
 - Syntax validation
 - Ctrl+Click error navigation
 - Ctrl+F Find & Replace dialog
@@ -18,14 +19,238 @@ import re
 import ast
 import subprocess
 import tempfile
+import os
+import venv
 from PySide6.QtWidgets import (QApplication, QMainWindow, QPlainTextEdit, 
                                QFileDialog, QMessageBox, QToolBar, QStatusBar,
                                QTextEdit, QSplitter, QCompleter, QInputDialog, QWidget,
                                QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton,
-                               QLabel, QCheckBox)
+                               QLabel, QCheckBox, QRadioButton, QButtonGroup, QGroupBox)
 from PySide6.QtCore import Qt, QRegularExpression, QProcess, QStringListModel, QRect, QTimer
 from PySide6.QtGui import (QSyntaxHighlighter, QTextCharFormat, QColor, 
                           QFont, QKeyEvent, QAction, QTextCursor, QPainter, QPalette, QTextDocument)
+
+
+class VenvDialog(QDialog):
+    """Dialog for creating or selecting a virtual environment"""
+    
+    def __init__(self, current_venv=None, parent=None):
+        super().__init__(parent)
+        self.selected_venv = current_venv
+        self.init_ui()
+    
+    def init_ui(self):
+        """Initialize the UI"""
+        self.setWindowTitle("Virtual Environment Manager")
+        self.setModal(True)
+        layout = QVBoxLayout()
+        
+        # Current venv display
+        current_group = QGroupBox("Current Environment")
+        current_layout = QVBoxLayout()
+        if self.selected_venv:
+            current_layout.addWidget(QLabel(f"Active: {self.selected_venv}"))
+        else:
+            current_layout.addWidget(QLabel("No virtual environment active"))
+        current_group.setLayout(current_layout)
+        layout.addWidget(current_group)
+        
+        # Option selection
+        options_group = QGroupBox("Select Action")
+        options_layout = QVBoxLayout()
+        
+        self.button_group = QButtonGroup()
+        
+        self.create_radio = QRadioButton("Create new virtual environment")
+        self.select_radio = QRadioButton("Select existing virtual environment")
+        self.deactivate_radio = QRadioButton("Deactivate current environment")
+        
+        self.button_group.addButton(self.create_radio)
+        self.button_group.addButton(self.select_radio)
+        self.button_group.addButton(self.deactivate_radio)
+        
+        options_layout.addWidget(self.create_radio)
+        options_layout.addWidget(self.select_radio)
+        options_layout.addWidget(self.deactivate_radio)
+        
+        self.create_radio.setChecked(True)
+        
+        options_group.setLayout(options_layout)
+        layout.addWidget(options_group)
+        
+        # Create venv section
+        create_group = QGroupBox("Create New")
+        create_layout = QVBoxLayout()
+        
+        name_layout = QHBoxLayout()
+        name_layout.addWidget(QLabel("Environment name:"))
+        self.venv_name_input = QLineEdit()
+        self.venv_name_input.setText("venv")
+        name_layout.addWidget(self.venv_name_input)
+        create_layout.addLayout(name_layout)
+        
+        location_layout = QHBoxLayout()
+        location_layout.addWidget(QLabel("Location:"))
+        self.venv_location_input = QLineEdit()
+        self.venv_location_input.setText(os.getcwd())
+        location_layout.addWidget(self.venv_location_input)
+        browse_btn = QPushButton("Browse...")
+        browse_btn.clicked.connect(self.browse_location)
+        location_layout.addWidget(browse_btn)
+        create_layout.addLayout(location_layout)
+        
+        self.system_packages_check = QCheckBox("Include system site-packages")
+        create_layout.addWidget(self.system_packages_check)
+        
+        create_group.setLayout(create_layout)
+        layout.addWidget(create_group)
+        
+        # Select venv section
+        select_group = QGroupBox("Select Existing")
+        select_layout = QVBoxLayout()
+        
+        select_path_layout = QHBoxLayout()
+        select_path_layout.addWidget(QLabel("Path:"))
+        self.venv_path_input = QLineEdit()
+        select_path_layout.addWidget(self.venv_path_input)
+        browse_venv_btn = QPushButton("Browse...")
+        browse_venv_btn.clicked.connect(self.browse_venv)
+        select_path_layout.addWidget(browse_venv_btn)
+        select_layout.addLayout(select_path_layout)
+        
+        select_group.setLayout(select_layout)
+        layout.addWidget(select_group)
+        
+        # Status label
+        self.status_label = QLabel("")
+        layout.addWidget(self.status_label)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        ok_btn = QPushButton("OK")
+        ok_btn.clicked.connect(self.on_ok)
+        button_layout.addWidget(ok_btn)
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+        self.resize(600, 400)
+    
+    def browse_location(self):
+        """Browse for directory to create venv in"""
+        directory = QFileDialog.getExistingDirectory(
+            self, "Select Directory", self.venv_location_input.text()
+        )
+        if directory:
+            self.venv_location_input.setText(directory)
+    
+    def browse_venv(self):
+        """Browse for existing venv directory"""
+        directory = QFileDialog.getExistingDirectory(
+            self, "Select Virtual Environment Directory", os.getcwd()
+        )
+        if directory:
+            self.venv_path_input.setText(directory)
+    
+    def on_ok(self):
+        """Handle OK button"""
+        if self.create_radio.isChecked():
+            self.create_venv()
+        elif self.select_radio.isChecked():
+            self.select_venv()
+        elif self.deactivate_radio.isChecked():
+            self.selected_venv = None
+            self.accept()
+    
+    def create_venv(self):
+        """Create a new virtual environment"""
+        name = self.venv_name_input.text().strip()
+        location = self.venv_location_input.text().strip()
+        
+        if not name:
+            self.status_label.setText("Please enter a name for the environment")
+            return
+        
+        if not location:
+            self.status_label.setText("Please select a location")
+            return
+        
+        venv_path = os.path.join(location, name)
+        
+        if os.path.exists(venv_path):
+            reply = QMessageBox.question(
+                self,
+                "Directory Exists",
+                f"Directory {venv_path} already exists.\nOverwrite?",
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.No:
+                return
+        
+        try:
+            self.status_label.setText("Creating virtual environment...")
+            QApplication.processEvents()
+            
+            # Create venv
+            builder = venv.EnvBuilder(
+                system_site_packages=self.system_packages_check.isChecked(),
+                clear=True,
+                with_pip=True
+            )
+            builder.create(venv_path)
+            
+            self.selected_venv = venv_path
+            self.status_label.setText(f"Successfully created: {venv_path}")
+            QMessageBox.information(
+                self,
+                "Success",
+                f"Virtual environment created at:\n{venv_path}"
+            )
+            self.accept()
+            
+        except Exception as e:
+            self.status_label.setText(f"Error: {str(e)}")
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to create virtual environment:\n{str(e)}"
+            )
+    
+    def select_venv(self):
+        """Select an existing virtual environment"""
+        venv_path = self.venv_path_input.text().strip()
+        
+        if not venv_path:
+            self.status_label.setText("Please select a virtual environment directory")
+            return
+        
+        if not os.path.exists(venv_path):
+            self.status_label.setText("Directory does not exist")
+            return
+        
+        # Check if it's a valid venv
+        if sys.platform == "win32":
+            python_exe = os.path.join(venv_path, "Scripts", "python.exe")
+        else:
+            python_exe = os.path.join(venv_path, "bin", "python")
+        
+        if not os.path.exists(python_exe):
+            QMessageBox.warning(
+                self,
+                "Invalid Environment",
+                f"This doesn't appear to be a valid virtual environment.\n"
+                f"Expected Python executable not found at:\n{python_exe}"
+            )
+            return
+        
+        self.selected_venv = venv_path
+        self.status_label.setText(f"Selected: {venv_path}")
+        self.accept()
 
 
 class PythonHighlighter(QSyntaxHighlighter):
@@ -1198,7 +1423,40 @@ class PythonEditor(QMainWindow):
         self.current_file = None
         self.process = None
         self.find_dialog = None
+        self.active_venv = None
+        self.load_venv_preference()
         self.init_ui()
+    
+    def load_venv_preference(self):
+        """Load venv preference from file"""
+        try:
+            with open('.microid_venv', 'r') as f:
+                venv_path = f.read().strip()
+                if venv_path and os.path.exists(venv_path):
+                    self.active_venv = venv_path
+        except:
+            pass
+    
+    def save_venv_preference(self):
+        """Save venv preference to file"""
+        try:
+            with open('.microid_venv', 'w') as f:
+                f.write(self.active_venv if self.active_venv else '')
+        except:
+            pass
+    
+    def get_python_executable(self):
+        """Get the Python executable to use (venv or system)"""
+        if self.active_venv:
+            if sys.platform == "win32":
+                python_exe = os.path.join(self.active_venv, "Scripts", "python.exe")
+            else:
+                python_exe = os.path.join(self.active_venv, "bin", "python")
+            
+            if os.path.exists(python_exe):
+                return python_exe
+        
+        return sys.executable
     
     def init_ui(self):
         """Initialize the user interface"""
@@ -1272,6 +1530,14 @@ class PythonEditor(QMainWindow):
         
         toolbar.addSeparator()
         
+        # Virtual Environment action
+        self.venv_action = QAction("🐍 Venv: None", self)
+        self.venv_action.triggered.connect(self.manage_venv)
+        toolbar.addAction(self.venv_action)
+        self.update_venv_button()
+        
+        toolbar.addSeparator()
+        
         # Find action
         find_action = QAction("Find", self)
         find_action.setShortcut("Ctrl+F")
@@ -1316,6 +1582,29 @@ class PythonEditor(QMainWindow):
         self.setStatusBar(self.statusBar)
         self.update_status_bar()
     
+    def manage_venv(self):
+        """Open virtual environment manager dialog"""
+        dialog = VenvDialog(self.active_venv, self)
+        if dialog.exec():
+            self.active_venv = dialog.selected_venv
+            self.save_venv_preference()
+            self.update_venv_button()
+            
+            if self.active_venv:
+                self.append_output(f"Activated virtual environment: {self.active_venv}", "#6A8759")
+            else:
+                self.append_output("Deactivated virtual environment", "#FFC66D")
+    
+    def update_venv_button(self):
+        """Update venv button text"""
+        if self.active_venv:
+            venv_name = os.path.basename(self.active_venv)
+            self.venv_action.setText(f"🐍 Venv: {venv_name}")
+            self.venv_action.setToolTip(self.active_venv)
+        else:
+            self.venv_action.setText("🐍 Venv: None")
+            self.venv_action.setToolTip("No virtual environment active")
+    
     def on_modification_changed(self, changed):
         """Update window title when document is modified"""
         title = "Microid"
@@ -1336,7 +1625,12 @@ class PythonEditor(QMainWindow):
         
         indent_info = f"{self.editor.indent_type.capitalize()} ({self.editor.indent_size})"
         
-        status = f"Line {line}/{total_lines} | Col {col} | {total_chars} chars | Indent: {indent_info}"
+        venv_info = ""
+        if self.active_venv:
+            venv_name = os.path.basename(self.active_venv)
+            venv_info = f" | Venv: {venv_name}"
+        
+        status = f"Line {line}/{total_lines} | Col {col} | {total_chars} chars | Indent: {indent_info}{venv_info}"
         self.statusBar.showMessage(status)
         
         if self.editor.indent_type == "spaces":
@@ -1490,8 +1784,15 @@ class PythonEditor(QMainWindow):
             self.append_output("=" * 50, "#808080")
             return
         
+        python_exe = self.get_python_executable()
+        
         self.append_output("=" * 50, "#808080")
-        self.append_output("Running code...", "#6897BB")
+        if self.active_venv:
+            venv_name = os.path.basename(self.active_venv)
+            self.append_output(f"Running code with venv: {venv_name}...", "#6897BB")
+        else:
+            self.append_output("Running code...", "#6897BB")
+        self.append_output(f"Python: {python_exe}", "#808080")
         self.append_output("", "#D4D4D4")
         
         try:
@@ -1504,7 +1805,7 @@ class PythonEditor(QMainWindow):
             self.process.readyReadStandardError.connect(self.handle_stderr)
             self.process.finished.connect(lambda: self.handle_finished(temp_file))
             
-            self.process.start(sys.executable, [temp_file])
+            self.process.start(python_exe, [temp_file])
             
         except Exception as e:
             self.append_output(f"Error running code: {str(e)}", "#FF6B6B")
@@ -1536,7 +1837,6 @@ class PythonEditor(QMainWindow):
             self.append_output("=" * 50, "#808080")
             
             try:
-                import os
                 os.unlink(temp_file)
             except:
                 pass
