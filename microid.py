@@ -376,6 +376,9 @@ class PythonHighlighter(QSyntaxHighlighter):
 
         self.setCurrentBlockState(0)
 
+        # FIX 1: Initialize flag to track if the multi-line string ended in this block
+        string_end_found = False
+
         # Check for continuation of triple-quoted strings
         in_multiline = self.previousBlockState() == 1
 
@@ -388,23 +391,27 @@ class PythonHighlighter(QSyntaxHighlighter):
                 length = end_index + 3
                 self.setFormat(0, length, self.tri_double_format)
                 self.setCurrentBlockState(0)
+                # FIX 2: Set flag after terminating the multi-line string
+                string_end_found = True
             else:
                 self.setFormat(0, len(text), self.tri_double_format)
                 self.setCurrentBlockState(1)
                 return
 
-        # Look for start of triple-quoted strings
-        for delimiter in ['"""', "'''"]:
-            start_index = text.find(delimiter)
-            if start_index >= 0:
-                end_index = text.find(delimiter, start_index + 3)
-                if end_index >= 0:
-                    length = end_index - start_index + 3
-                    self.setFormat(start_index, length, self.tri_double_format)
-                else:
-                    self.setFormat(start_index, len(text) - start_index, self.tri_double_format)
-                    self.setCurrentBlockState(1)
-                    return
+        # FIX 3: Only look for the start of a NEW triple-quoted string if one hasn't just ended
+        if not string_end_found:
+            # Look for start of triple-quoted strings
+            for delimiter in ['"""', "'''"]:
+                start_index = text.find(delimiter)
+                if start_index >= 0:
+                    end_index = text.find(delimiter, start_index + 3)
+                    if end_index >= 0:
+                        length = end_index - start_index + 3
+                        self.setFormat(start_index, length, self.tri_double_format)
+                    else:
+                        self.setFormat(start_index, len(text) - start_index, self.tri_double_format)
+                        self.setCurrentBlockState(1)
+                        return
 
         # Handle single-line strings (including f-strings)
         self.highlight_strings(text)
